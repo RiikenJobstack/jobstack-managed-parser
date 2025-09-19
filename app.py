@@ -4,7 +4,7 @@ import os
 from contextlib import asynccontextmanager
 from typing import Dict, Any, Optional
 
-from fastapi import FastAPI, UploadFile, File, HTTPException, BackgroundTasks, Depends
+from fastapi import FastAPI, UploadFile, File, HTTPException, BackgroundTasks, Depends, Form
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from dotenv import load_dotenv
@@ -100,14 +100,16 @@ request_stats = {
 
 @app.post("/parse-resume")
 async def parse_resume_endpoint(
-    file: UploadFile = File(...),
-    fresh: bool = False,
+    fileType: str = Form(...),  # either "file" or "text"
+    file: Optional[UploadFile] = File(default=None),
+    text: Optional[str] = Form(default=None),
+    fresh: bool = Form(default=False),
     auth_user: Optional[Dict[str, Any]] = Depends(require_authentication),
     origin_info: Optional[Dict[str, Any]] = Depends(require_valid_origin)
 ) -> JSONResponse:
     """
     Single endpoint for resume parsing
-    Supports: PDF, DOC, DOCX, PNG, JPG, JPEG
+    Supports: PDF, DOC, DOCX, PNG, JPG, JPEG, TXT, or direct text input
     Target: 15-second response time
     Concurrency: 100+ users
     """
@@ -117,34 +119,53 @@ async def parse_resume_endpoint(
     request_stats["concurrent_requests"] += 1
 
     try:
-        # Validate file
-        if not file.filename:
-            raise HTTPException(status_code=400, detail="No file provided")
+        # Process based on fileType
+        if fileType == "file":
+            # Validate file
+            if not file or not file.filename:
+                raise HTTPException(status_code=400, detail="No file provided")
 
-        # Check file size (10MB limit for Textract)
-        content = await file.read()
-        if len(content) > 10_000_000:  # 10MB
-            raise HTTPException(status_code=413, detail="File too large (max 10MB)")
+            # Check file size (10MB limit for Textract)
+            content = await file.read()
+            if len(content) > 10_000_000:  # 10MB
+                raise HTTPException(status_code=413, detail="File too large (max 10MB)")
 
-        # Validate file type
-        allowed_extensions = ['pdf', 'doc', 'docx', 'png', 'jpg', 'jpeg', 'txt']
-        file_ext = file.filename.lower().split('.')[-1] if '.' in file.filename else ''
+            # Validate file type
+            allowed_extensions = ['pdf', 'doc', 'docx', 'png', 'jpg', 'jpeg', 'txt']
+            file_ext = file.filename.lower().split('.')[-1] if '.' in file.filename else ''
 
-        if file_ext not in allowed_extensions:
+            if file_ext not in allowed_extensions:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Unsupported file type: {file_ext}. Allowed: {', '.join(allowed_extensions)}"
+                )
+
+            filename = file.filename
+
+        elif fileType == "text":
+            # Validate text input
+            if not text or not text.strip():
+                raise HTTPException(status_code=400, detail="No text provided")
+
+            # Convert text to bytes for processing
+            content = text.encode('utf-8')
+            filename = "resume.txt"  # Default filename for text input
+
+        else:
             raise HTTPException(
                 status_code=400,
-                detail=f"Unsupported file type: {file_ext}. Allowed: {', '.join(allowed_extensions)}"
+                detail="Invalid fileType. Must be 'file' or 'text'."
             )
 
         # Log authenticated user and origin
         user_id = auth_user.get("userId") if auth_user else "anonymous"
         origin = origin_info.get("origin") if origin_info else "no-origin"
         origin_valid = origin_info.get("is_origin_valid") if origin_info else True
-        print(f"📄 Processing: {file.filename} ({len(content)} bytes) for user: {user_id} from origin: {origin} (valid: {origin_valid})")
+        print(f"📄 Processing: {filename} ({len(content)} bytes) for user: {user_id} from origin: {origin} (valid: {origin_valid})")
 
         # Process the resume with request parameters
         request_params = {"fresh": fresh}
-        result = await process_resume(content, file.filename, request_params)
+        result = await process_resume(content, filename, request_params)
 
         # Add user context and origin info to response metadata
         if "metadata" in result:
@@ -160,7 +181,7 @@ async def parse_resume_endpoint(
             / request_stats["successful_requests"]
         )
 
-        print(f"✅ Completed: {file.filename} in {processing_time:.2f}s")
+        print(f"✅ Completed: {filename if fileType == 'text' else file.filename} in {processing_time:.2f}s")
 
         return JSONResponse(
             status_code=200,
