@@ -26,47 +26,23 @@ def get_google_credentials():
     global _credentials, _google_config
 
     if _credentials is None:
-        try:
-            # Try managed services credentials first
-            credentials_path = os.getenv("GOOGLE_APPLICATION_CREDENTIALS_MANAGED")
-            if credentials_path and os.path.exists(credentials_path):
-                _credentials = service_account.Credentials.from_service_account_file(
-                    credentials_path,
-                    scopes=['https://www.googleapis.com/auth/cloud-platform']
-                )
+        # Get credentials from JSON string environment variable
+        google_app_credentials = os.getenv("GOOGLE_APPLICATION_CREDENTIALS")
 
-                # Load project config
-                with open(credentials_path) as f:
-                    _google_config = json.load(f)
+        if not google_app_credentials:
+            raise ValueError("Missing GOOGLE_APPLICATION_CREDENTIALS secret")
 
-                logger.info("✅ Loaded Google Cloud credentials from managed services file")
+        # Parse the JSON string into a dict
+        credentials_info = json.loads(google_app_credentials)
 
-            else:
-                # Fallback to standard credentials
-                credentials_path = os.getenv("GOOGLE_APPLICATION_CREDENTIALS")
-                if credentials_path and os.path.exists(credentials_path):
-                    _credentials = service_account.Credentials.from_service_account_file(
-                        credentials_path,
-                        scopes=['https://www.googleapis.com/auth/cloud-platform']
-                    )
+        # Create credentials object
+        _credentials = service_account.Credentials.from_service_account_info(
+            credentials_info,
+            scopes=["https://www.googleapis.com/auth/cloud-platform"]
+        )
 
-                    # Load project config
-                    with open(credentials_path) as f:
-                        _google_config = json.load(f)
-
-                    logger.info("✅ Loaded Google Cloud credentials from service account file")
-
-                else:
-                    # Final fallback to default credentials
-                    _credentials, project_id = google.auth.default(
-                        scopes=['https://www.googleapis.com/auth/cloud-platform']
-                    )
-                    _google_config = {"project_id": project_id}
-                    logger.info("✅ Loaded Google Cloud default credentials")
-
-        except Exception as e:
-            logger.error(f"❌ Failed to load Google Cloud credentials: {str(e)}")
-            raise Exception(f"Google Cloud authentication failed: {str(e)}")
+        _google_config = {"project_id": credentials_info.get("project_id")}
+        logger.info("✅ Loaded Google Cloud credentials from GOOGLE_APPLICATION_CREDENTIALS environment variable")
 
     return _credentials, _google_config
 
